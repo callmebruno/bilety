@@ -116,10 +116,17 @@ def send_email(subject: str, body: str, cfg: dict, chart_png: bytes | None = Non
         return
 
     if chart_png:
-        msg = MIMEMultipart()
-        msg.attach(MIMEText(body, "plain", "utf-8"))
-        img = MIMEImage(chart_png, name="wykres.png")
-        img.add_header("Content-Disposition", "attachment", filename="wykres.png")
+        msg = MIMEMultipart("related")
+        html_body = (
+            f'<html><body>'
+            f'<pre style="font-family:monospace;font-size:14px;line-height:1.5">{body}</pre>'
+            f'<br><img src="cid:chart" style="max-width:100%;border:1px solid #ddd;border-radius:4px">'
+            f'</body></html>'
+        )
+        msg.attach(MIMEText(html_body, "html", "utf-8"))
+        img = MIMEImage(chart_png)
+        img.add_header("Content-ID", "<chart>")
+        img.add_header("Content-Disposition", "inline", filename="wykres.png")
         msg.attach(img)
     else:
         msg = MIMEText(body, "plain", "utf-8")
