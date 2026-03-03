@@ -4,6 +4,9 @@ import os
 import smtplib
 import sys
 from datetime import datetime
+from zoneinfo import ZoneInfo
+
+WARSAW = ZoneInfo("Europe/Warsaw")
 from email.mime.image import MIMEImage
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -229,7 +232,7 @@ def main() -> None:
         print("[ERROR] Brak tras w config.json (klucz 'routes').", file=sys.stderr)
         sys.exit(1)
 
-    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    now = datetime.now(WARSAW).strftime("%Y-%m-%d %H:%M")
     prices = load_prices()
 
     for route in routes:
