@@ -1,0 +1,30 @@
+{
+  "currency": "PLN",
+  "email_to": "user@example.com",
+  "routes": [
+    {
+      "origin": "KRK",
+      "destination": "FAO",
+      "date": "2026-04-15",
+      "price_threshold": null
+    },
+    {
+      "origin": "FAO",
+      "destination": "KRK",
+      "date": "2026-04-19",
+      "price_threshold": null
+    },
+    {
+      "origin": "KRK",
+      "destination": "OPO",
+      "date": "2026-06-07",
+      "price_threshold": null
+    },
+    {
+      "origin": "KRK",
+      "destination": "LIS",
+      "date": "2026-06-07",
+      "price_threshold": null
+    }
+  ]
+}
