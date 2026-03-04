@@ -108,10 +108,9 @@ def generate_chart(history: list, route_label: str, currency: str) -> bytes | No
     return buf.read()
 
 
-def send_email(subject: str, body: str, cfg: dict, chart_png: bytes | None = None) -> None:
+def send_email(subject: str, body: str, email_to_raw: str, chart_png: bytes | None = None) -> None:
     email_from = os.environ.get("EMAIL_FROM", "")
     email_password = os.environ.get("EMAIL_PASSWORD", "")
-    email_to_raw = os.environ.get("EMAIL_TO") or cfg.get("email_to", "")
     recipients = [a.strip() for a in email_to_raw.split(",") if a.strip()]
 
     if not email_from or not email_password or not recipients:
@@ -160,6 +159,9 @@ def check_route(route: dict, cfg: dict, prices: dict, now: str, force: bool = Fa
     currency = cfg.get("currency", "PLN")
     threshold = route.get("price_threshold")
 
+    global_email = os.environ.get("EMAIL_TO") or cfg.get("email_to", "")
+    email_to = route.get("email_to") or global_email
+
     key = f"{origin}-{destination}-{date}"
     route_label = f"{origin} → {destination} ({date})"
     print(f"[{now}] Sprawdzam lot {origin} → {destination} na {date} ({currency})")
@@ -178,7 +180,7 @@ def check_route(route: dict, cfg: dict, prices: dict, now: str, force: bool = Fa
                 f"Aktualnie: lot niedostępny lub błąd API\n\n"
                 f"Link: {ryanair_search_url(origin, destination, date)}"
             )
-            send_email(subject, body, cfg)
+            send_email(subject, body, email_to)
         history.append({"price": None, "checked_at": now})
         prices[key] = {"history": history}
         return
@@ -214,7 +216,7 @@ def check_route(route: dict, cfg: dict, prices: dict, now: str, force: bool = Fa
             f"Sprawdzono: {now}\n\n"
             f"Link: {ryanair_search_url(origin, destination, date)}"
         )
-        send_email(subject, body, cfg, chart_png)
+        send_email(subject, body, email_to, chart_png)
 
     history.append({"price": current_price, "checked_at": now})
     prices[key] = {"history": history}
