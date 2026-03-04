@@ -1,30 +1,48 @@
 {
   "currency": "PLN",
-  "email_to": "user@example.com",
+  "email_to": "domyslny@interia.pl",
   "routes": [
     {
       "origin": "KRK",
       "destination": "FAO",
       "date": "2026-04-15",
-      "price_threshold": null
+      "price_threshold": null,
+      "email_to": "p.iwonastolarz@gmail.com, trelakrystian@gmail.com"
     },
     {
       "origin": "FAO",
       "destination": "KRK",
       "date": "2026-04-19",
-      "price_threshold": null
+      "price_threshold": null,
+      "email_to": "p.iwonastolarz@gmail.com, trelakrystian@gmail.com"
     },
     {
       "origin": "KRK",
       "destination": "OPO",
       "date": "2026-06-07",
-      "price_threshold": null
+      "price_threshold": null,
+      "email_to": "p.iwonastolarz@gmail.com, trelakrystian@gmail.com"
     },
     {
       "origin": "KRK",
       "destination": "LIS",
       "date": "2026-06-07",
-      "price_threshold": null
+      "price_threshold": null,
+      "email_to": "p.iwonastolarz@gmail.com, trelakrystian@gmail.com"
+    },
+    {
+      "origin": "KRK",
+      "destination": "RAK",
+      "date": "2026-05-03",
+      "price_threshold": null,
+      "email_to": "dominikjuszczyk96@gmail.com"
+    },
+    {
+      "origin": "RAK",
+      "destination": "KRK",
+      "date": "2026-05-10",
+      "price_threshold": null,
+      "email_to": "dominikjuszczyk96@gmail.com"
     }
   ]
 }
