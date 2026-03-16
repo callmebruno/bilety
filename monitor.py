@@ -6,6 +6,9 @@ import sys
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+from dotenv import load_dotenv
+load_dotenv()
+
 WARSAW = ZoneInfo("Europe/Warsaw")
 from email.mime.image import MIMEImage
 from email.mime.multipart import MIMEMultipart
@@ -21,7 +24,7 @@ import requests
 CONFIG_FILE = Path(__file__).parent / "config.json"
 PRICES_FILE = Path(__file__).parent / "prices.json"
 
-RYANAIR_API = "https://www.ryanair.com/api/farfnd/v4/oneWayFares"
+RYANAIR_AVAILABILITY_API = "https://www.ryanair.com/api/booking/v4/pl-pl/availability"
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -54,33 +57,49 @@ def save_prices(prices: dict) -> None:
         json.dump(prices, f, indent=2, ensure_ascii=False)
 
 
-def fetch_price(origin: str, destination: str, date: str, currency: str) -> float | None:
+def fetch_price(origin: str, destination: str, date: str, currency: str) -> dict | None:
+    """Zwraca dict {"price", "fares_left"} lub None."""
     params = {
-        "departureAirportIataCode": origin,
-        "arrivalAirportIataCode": destination,
-        "outboundDepartureDateFrom": date,
-        "outboundDepartureDateTo": date,
-        "currency": currency,
-        "market": "pl-pl",
+        "ADT": 1, "CHD": 0, "TEEN": 0, "INF": 0,
+        "DateOut": date,
+        "Origin": origin,
+        "Destination": destination,
+        "Disc": 0,
+        "promoCode": "",
+        "IncludeConnectingFlights": "false",
+        "ToUs": "AGREED",
     }
     try:
-        resp = requests.get(RYANAIR_API, params=params, headers=HEADERS, timeout=30)
+        resp = requests.get(RYANAIR_AVAILABILITY_API, params=params, headers=HEADERS, timeout=30)
         resp.raise_for_status()
         data = resp.json()
     except requests.RequestException as e:
         print(f"[ERROR] Błąd zapytania do API Ryanair: {e}", file=sys.stderr)
         return None
 
-    fares = data.get("fares", [])
-    if not fares:
+    trips = data.get("trips", [])
+    if not trips:
         return None
 
-    prices = [
-        fare["outbound"]["price"]["value"]
-        for fare in fares
-        if fare.get("outbound") and fare["outbound"].get("price")
-    ]
-    return min(prices) if prices else None
+    best = None
+    for trip in trips:
+        for dt in trip.get("dates", []):
+            for flight in dt.get("flights", []):
+                regular = flight.get("regularFare")
+                if not regular:
+                    continue
+                fares = regular.get("fares", [])
+                for fare in fares:
+                    price = fare.get("amount")
+                    if price is None:
+                        continue
+                    fares_left = flight.get("faresLeft", -1)
+                    if best is None or price < best["price"]:
+                        best = {
+                            "price": price,
+                            "fares_left": fares_left,
+                        }
+    return best
 
 
 def generate_chart(history: list, route_label: str, currency: str) -> bytes | None:
@@ -166,12 +185,12 @@ def check_route(route: dict, cfg: dict, prices: dict, now: str, force: bool = Fa
     route_label = f"{origin} → {destination} ({date})"
     print(f"[{now}] Sprawdzam lot {origin} → {destination} na {date} ({currency})")
 
-    current_price = fetch_price(origin, destination, date, currency)
+    result = fetch_price(origin, destination, date, currency)
     entry = prices.get(key, {"history": []})
     history = entry["history"]
     previous_price = history[-1]["price"] if history else None
 
-    if current_price is None:
+    if result is None:
         print("[INFO] Brak dostępnych lotów / błąd API.")
         if previous_price is not None:
             subject = f"✈ Ryanair {origin}→{destination} {date}: brak lotów"
@@ -185,7 +204,13 @@ def check_route(route: dict, cfg: dict, prices: dict, now: str, force: bool = Fa
         prices[key] = {"history": history}
         return
 
-    print(f"[INFO] Aktualna cena: {current_price:.2f} {currency} (poprzednia: {previous_price})")
+    current_price = result["price"]
+    fares_left = result["fares_left"]
+
+    if fares_left >= 0:
+        print(f"[INFO] Aktualna cena: {current_price:.2f} {currency} (poprzednia: {previous_price}) — zostało {fares_left} miejsc w tej cenie")
+    else:
+        print(f"[INFO] Aktualna cena: {current_price:.2f} {currency} (poprzednia: {previous_price})")
 
     is_first_run = previous_price is None
     price_changed = not is_first_run and abs(current_price - previous_price) >= 5.0
@@ -205,12 +230,17 @@ def check_route(route: dict, cfg: dict, prices: dict, now: str, force: bool = Fa
         if threshold is not None and current_price <= threshold:
             threshold_line = f"\n⚠ Cena poniżej progu {threshold:.2f} {currency}!"
 
+        availability_line = ""
+        if fares_left >= 0:
+            warn = "⚠ " if fares_left <= 3 else ""
+            availability_line = f"\n{warn}Pozostało {fares_left} miejsc w tej cenie"
+
         future_history = history + [{"price": current_price, "checked_at": now}]
         chart_png = generate_chart(future_history, route_label, currency)
 
         subject = f"✈ Ryanair {origin}→{destination} {date}: {current_price:.2f} {currency}"
         body = (
-            f"{change_line}{threshold_line}\n\n"
+            f"{change_line}{threshold_line}{availability_line}\n\n"
             f"Data: {date}\n"
             f"Trasa: {origin} → {destination}\n"
             f"Sprawdzono: {now}\n\n"
