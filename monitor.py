@@ -24,6 +24,7 @@ import requests
 CONFIG_FILE = Path(__file__).parent / "config.json"
 PRICES_FILE = Path(__file__).parent / "prices.json"
 
+RYANAIR_FARES_API = "https://www.ryanair.com/api/farfnd/v4/oneWayFares"
 RYANAIR_AVAILABILITY_API = "https://www.ryanair.com/api/booking/v4/pl-pl/availability"
 HEADERS = {
     "User-Agent": (
@@ -59,7 +60,38 @@ def save_prices(prices: dict) -> None:
 
 def fetch_price(origin: str, destination: str, date: str, currency: str) -> dict | None:
     """Zwraca dict {"price", "fares_left"} lub None."""
-    params = {
+    # --- cena w wybranej walucie (stare API) ---
+    fare_params = {
+        "departureAirportIataCode": origin,
+        "arrivalAirportIataCode": destination,
+        "outboundDepartureDateFrom": date,
+        "outboundDepartureDateTo": date,
+        "currency": currency,
+        "market": "pl-pl",
+    }
+    try:
+        resp = requests.get(RYANAIR_FARES_API, params=fare_params, headers=HEADERS, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+    except requests.RequestException as e:
+        print(f"[ERROR] Błąd zapytania do API cen: {e}", file=sys.stderr)
+        return None
+
+    fares = data.get("fares", [])
+    if not fares:
+        return None
+
+    prices = [
+        fare["outbound"]["price"]["value"]
+        for fare in fares
+        if fare.get("outbound") and fare["outbound"].get("price")
+    ]
+    if not prices:
+        return None
+    price = min(prices)
+
+    # --- dostępność miejsc (nowe API) ---
+    avail_params = {
         "ADT": 1, "CHD": 0, "TEEN": 0, "INF": 0,
         "DateOut": date,
         "Origin": origin,
@@ -69,37 +101,21 @@ def fetch_price(origin: str, destination: str, date: str, currency: str) -> dict
         "IncludeConnectingFlights": "false",
         "ToUs": "AGREED",
     }
+    fares_left = -1
     try:
-        resp = requests.get(RYANAIR_AVAILABILITY_API, params=params, headers=HEADERS, timeout=30)
-        resp.raise_for_status()
-        data = resp.json()
-    except requests.RequestException as e:
-        print(f"[ERROR] Błąd zapytania do API Ryanair: {e}", file=sys.stderr)
-        return None
+        resp2 = requests.get(RYANAIR_AVAILABILITY_API, params=avail_params, headers=HEADERS, timeout=30)
+        resp2.raise_for_status()
+        data2 = resp2.json()
+        for trip in data2.get("trips", []):
+            for dt in trip.get("dates", []):
+                for flight in dt.get("flights", []):
+                    fl = flight.get("faresLeft", -1)
+                    if fl >= 0 and (fares_left < 0 or fl < fares_left):
+                        fares_left = fl
+    except requests.RequestException:
+        pass  # dostępność opcjonalna — nie blokujemy przez to
 
-    trips = data.get("trips", [])
-    if not trips:
-        return None
-
-    best = None
-    for trip in trips:
-        for dt in trip.get("dates", []):
-            for flight in dt.get("flights", []):
-                regular = flight.get("regularFare")
-                if not regular:
-                    continue
-                fares = regular.get("fares", [])
-                for fare in fares:
-                    price = fare.get("amount")
-                    if price is None:
-                        continue
-                    fares_left = flight.get("faresLeft", -1)
-                    if best is None or price < best["price"]:
-                        best = {
-                            "price": price,
-                            "fares_left": fares_left,
-                        }
-    return best
+    return {"price": price, "fares_left": fares_left}
 
 
 def generate_chart(history: list, route_label: str, currency: str) -> bytes | None:
