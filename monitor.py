@@ -59,7 +59,7 @@ def save_prices(prices: dict) -> None:
 
 
 def fetch_price(origin: str, destination: str, date: str, currency: str) -> dict | None:
-    """Zwraca dict {"price", "fares_left"} lub None."""
+    """Zwraca dict {"price", "fares_left", "buckets"} lub None."""
     # --- cena w wybranej walucie (stare API) ---
     fare_params = {
         "departureAirportIataCode": origin,
@@ -90,32 +90,59 @@ def fetch_price(origin: str, destination: str, date: str, currency: str) -> dict
         return None
     price = min(prices)
 
-    # --- dostępność miejsc (nowe API) ---
-    avail_params = {
-        "ADT": 1, "CHD": 0, "TEEN": 0, "INF": 0,
-        "DateOut": date,
-        "Origin": origin,
-        "Destination": destination,
-        "Disc": 0,
-        "promoCode": "",
-        "IncludeConnectingFlights": "false",
-        "ToUs": "AGREED",
-    }
+    # --- dostępność miejsc + koszyki cenowe (availability API) ---
     fares_left = -1
+    buckets = []
     try:
-        resp2 = requests.get(RYANAIR_AVAILABILITY_API, params=avail_params, headers=HEADERS, timeout=30)
-        resp2.raise_for_status()
-        data2 = resp2.json()
-        for trip in data2.get("trips", []):
-            for dt in trip.get("dates", []):
-                for flight in dt.get("flights", []):
-                    fl = flight.get("faresLeft", -1)
-                    if fl >= 0 and (fares_left < 0 or fl < fares_left):
-                        fares_left = fl
-    except requests.RequestException:
-        pass  # dostępność opcjonalna — nie blokujemy przez to
+        avail_prices = {}
+        for adt in range(1, 26):
+            avail_params = {
+                "ADT": adt, "CHD": 0, "TEEN": 0, "INF": 0,
+                "DateOut": date,
+                "Origin": origin,
+                "Destination": destination,
+                "Disc": 0,
+                "promoCode": "",
+                "IncludeConnectingFlights": "false",
+                "ToUs": "AGREED",
+            }
+            resp2 = requests.get(RYANAIR_AVAILABILITY_API, params=avail_params, headers=HEADERS, timeout=30)
+            resp2.raise_for_status()
+            data2 = resp2.json()
+            for trip in data2.get("trips", []):
+                for dt in trip.get("dates", []):
+                    for flight in dt.get("flights", []):
+                        if adt == 1:
+                            fl = flight.get("faresLeft", -1)
+                            if fl >= 0 and (fares_left < 0 or fl < fares_left):
+                                fares_left = fl
+                        rf = flight.get("regularFare")
+                        if rf:
+                            for f in rf.get("fares", []):
+                                avail_prices[adt] = f["amount"]
 
-    return {"price": price, "fares_left": fares_left}
+        # Przelicz koszyki na walutę docelową (PLN)
+        # availability API zwraca walutę kraju wylotu (np. EUR, MAD)
+        # fares API zwraca walutę z configu (PLN) — używamy proporcji
+        if avail_prices and avail_prices.get(1):
+            ratio = price / avail_prices[1]  # np. 310 PLN / 91 EUR = 3.41
+
+            prev_raw = None
+            bucket_start = 1
+            for adt in range(1, 26):
+                ap = avail_prices.get(adt)
+                if ap is None:
+                    continue
+                if prev_raw is not None and ap != prev_raw:
+                    buckets.append({"price": round(prev_raw * ratio, 2), "seats": adt - bucket_start})
+                    bucket_start = adt
+                prev_raw = ap
+            if prev_raw is not None:
+                buckets.append({"price": round(prev_raw * ratio, 2), "seats_min": 26 - bucket_start, "is_last": True})
+    except requests.RequestException:
+        pass  # dostępność opcjonalna
+
+    return {"price": price, "fares_left": fares_left, "buckets": buckets}
 
 
 def generate_chart(history: list, route_label: str, currency: str) -> bytes | None:
@@ -126,13 +153,16 @@ def generate_chart(history: list, route_label: str, currency: str) -> bytes | No
     timestamps = [datetime.strptime(ts, "%Y-%m-%d %H:%M") for ts, _ in valid]
     price_vals = [p for _, p in valid]
 
-    fig, ax = plt.subplots(figsize=(10, 4))
+    fig, ax = plt.subplots(figsize=(10, 3))
     ax.plot(timestamps, price_vals, marker="o", linewidth=1.5, color="#1a73e8")
     ax.fill_between(timestamps, price_vals, alpha=0.1, color="#1a73e8")
     ax.set_title(f"Historia cen: {route_label}", fontsize=13)
     ax.set_ylabel(f"Cena ({currency})")
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%d.%m %H:%M"))
     plt.xticks(rotation=30, ha="right")
+    min_p, max_p = min(price_vals), max(price_vals)
+    margin = max((max_p - min_p) * 0.15, 5)
+    ax.set_ylim(min_p - margin, max_p + margin)
     ax.grid(True, linestyle="--", alpha=0.5)
     plt.tight_layout()
 
@@ -141,6 +171,76 @@ def generate_chart(history: list, route_label: str, currency: str) -> bytes | No
     plt.close(fig)
     buf.seek(0)
     return buf.read()
+
+
+def build_email_html(
+    origin: str,
+    destination: str,
+    change_line: str,
+    threshold_line: str,
+    buckets: list,
+    currency: str,
+    date: str,
+    now: str,
+    link: str,
+    has_chart: bool,
+) -> str:
+    S = "border-collapse:collapse;width:100%;font-size:13px"
+    TH = "padding:5px 10px;text-align:center;color:white;background:#0d47a1"
+    TD = "padding:4px 10px;border-bottom:1px solid #e8e8e8"
+
+    # Tabela koszyków — pasek poziomy z kolorami
+    buckets_html = ""
+    if buckets:
+        total_seats = 0
+        cols_header = ""
+        cols_seats = ""
+        colors = ["#0d47a1", "#1565c0", "#1976d2", "#1e88e5", "#42a5f5", "#64b5f6", "#90caf9"]
+        for i, b in enumerate(buckets):
+            if b.get("is_last"):
+                seats_str = f"{b['seats_min']}+"
+                total_seats += b["seats_min"]
+            else:
+                seats_str = str(b["seats"])
+                total_seats += b["seats"]
+            bg = colors[i % len(colors)]
+            cols_header += f'<td style="padding:6px 4px;text-align:center;color:white;background:{bg};font-size:12px;white-space:nowrap"><b>{b["price"]:.0f}</b> {currency}</td>'
+            cols_seats += f'<td style="padding:4px;text-align:center;font-size:12px;background:#f5f8ff">{seats_str}</td>'
+
+        buckets_html = f"""
+        <table style="{S};margin:12px 0;border:1px solid #ccc;border-radius:4px;overflow:hidden">
+          <tr>{cols_header}</tr>
+          <tr>{cols_seats}</tr>
+          <tr><td colspan="{len(buckets)}" style="padding:4px;text-align:center;font-size:11px;color:#666;background:#f0f0f0">Dostępnych miejsc: min. <b>{total_seats}</b></td></tr>
+        </table>"""
+
+    threshold_html = ""
+    if threshold_line:
+        threshold_html = f'<div style="background:#fff3e0;border-left:3px solid #ff9800;padding:6px 10px;margin:8px 0;font-size:13px;color:#e65100">{threshold_line}</div>'
+
+    chart_html = ""
+    if has_chart:
+        chart_html = '<img src="cid:chart" style="width:100%;border-radius:4px;margin:8px 0">'
+
+    return f"""<html>
+<body style="font-family:-apple-system,Arial,sans-serif;color:#222;margin:0;padding:0">
+  <table width="100%" cellpadding="0" cellspacing="0" style="max-width:600px">
+    <tr><td style="background:#0d47a1;padding:12px 16px">
+      <!--[if mso]><table width="100%"><tr><td><![endif]-->
+      <a href="{link}" style="float:right;color:white;background:rgba(255,255,255,0.2);padding:5px 12px;border-radius:4px;text-decoration:none;font-size:12px;font-weight:bold;margin-left:12px;margin-top:4px">Rezerwuj &rarr;</a>
+      <span style="color:white;font-size:18px;font-weight:bold">✈ {origin} &rarr; {destination}</span><br><span style="color:rgba(255,255,255,0.7);font-size:12px">{date}</span>
+      <!--[if mso]></td></tr></table><![endif]-->
+    </td></tr>
+    <tr><td style="padding:14px 16px">
+      <p style="font-size:15px;margin:0 0 4px;color:#333">{change_line}</p>
+      {threshold_html}
+      {buckets_html}
+      {chart_html}
+      <p style="font-size:11px;color:#aaa;margin:10px 0 0">Sprawdzono: {now}</p>
+    </td></tr>
+  </table>
+</body>
+</html>"""
 
 
 def send_email(subject: str, body: str, email_to_raw: str, chart_png: bytes | None = None) -> None:
@@ -154,19 +254,14 @@ def send_email(subject: str, body: str, email_to_raw: str, chart_png: bytes | No
 
     if chart_png:
         msg = MIMEMultipart("related")
-        html_body = (
-            f'<html><body>'
-            f'<pre style="font-family:monospace;font-size:14px;line-height:1.5">{body}</pre>'
-            f'<br><img src="cid:chart" style="max-width:100%;border:1px solid #ddd;border-radius:4px">'
-            f'</body></html>'
-        )
-        msg.attach(MIMEText(html_body, "html", "utf-8"))
+        msg.attach(MIMEText(body, "html", "utf-8"))
         img = MIMEImage(chart_png)
         img.add_header("Content-ID", "<chart>")
         img.add_header("Content-Disposition", "inline", filename="wykres.png")
         msg.attach(img)
     else:
-        msg = MIMEText(body, "plain", "utf-8")
+        msg = MIMEMultipart("related")
+        msg.attach(MIMEText(body, "html", "utf-8"))
 
     msg["Subject"] = subject
     msg["From"] = email_from
@@ -210,11 +305,17 @@ def check_route(route: dict, cfg: dict, prices: dict, now: str, force: bool = Fa
         print("[INFO] Brak dostępnych lotów / błąd API.")
         if previous_price is not None:
             subject = f"✈ Ryanair {origin}→{destination} {date}: brak lotów"
-            body = (
-                f"Poprzednia cena: {previous_price:.2f} {currency}\n"
-                f"Aktualnie: lot niedostępny lub błąd API\n\n"
-                f"Link: {ryanair_search_url(origin, destination, date)}"
-            )
+            link = ryanair_search_url(origin, destination, date)
+            body = f"""<html>
+<body style="font-family:Arial,Helvetica,sans-serif;color:#333;max-width:600px;margin:0;padding:16px">
+  <h2 style="color:#d32f2f;margin-bottom:4px">✈ {route_label}</h2>
+  <p style="font-size:16px">Poprzednia cena: <b>{previous_price:.2f} {currency}</b></p>
+  <p style="color:#d32f2f;font-weight:bold">Lot niedostępny lub błąd API</p>
+  <p style="margin-top:16px">
+    <a href="{link}" style="display:inline-block;background:#1a73e8;color:white;padding:10px 20px;border-radius:6px;text-decoration:none;font-weight:bold">Sprawdź na Ryanair →</a>
+  </p>
+</body>
+</html>"""
             send_email(subject, body, email_to)
         history.append({"price": None, "checked_at": now})
         prices[key] = {"history": history}
@@ -222,16 +323,24 @@ def check_route(route: dict, cfg: dict, prices: dict, now: str, force: bool = Fa
 
     current_price = result["price"]
     fares_left = result["fares_left"]
+    buckets = result.get("buckets", [])
 
     if fares_left >= 0:
         print(f"[INFO] Aktualna cena: {current_price:.2f} {currency} (poprzednia: {previous_price}) — zostało {fares_left} miejsc w tej cenie")
     else:
         print(f"[INFO] Aktualna cena: {current_price:.2f} {currency} (poprzednia: {previous_price})")
+    if buckets:
+        print(f"[INFO] Koszyki cenowe: {len(buckets)} poziomów")
+
+    total_seats = 0
+    for b in buckets:
+        total_seats += b.get("seats", 0) + b.get("seats_min", 0)
+    low_availability = buckets and total_seats < 25
 
     is_first_run = previous_price is None
     price_changed = not is_first_run and abs(current_price - previous_price) >= 5.0
 
-    if not force and not is_first_run and not price_changed:
+    if not force and not is_first_run and not price_changed and not low_availability:
         print("[INFO] Cena bez zmian, email nie wysłany.")
     elif not force and threshold is not None and not is_first_run and current_price > threshold:
         print(f"[INFO] Cena zmieniła się, ale {current_price:.2f} > próg {threshold:.2f} — email pominięty.")
@@ -244,25 +353,29 @@ def check_route(route: dict, cfg: dict, prices: dict, now: str, force: bool = Fa
 
         threshold_line = ""
         if threshold is not None and current_price <= threshold:
-            threshold_line = f"\n⚠ Cena poniżej progu {threshold:.2f} {currency}!"
-
-        availability_line = ""
-        if fares_left >= 0:
-            warn = "⚠ " if fares_left <= 3 else ""
-            availability_line = f"\n{warn}Pozostało {fares_left} miejsc w tej cenie"
+            threshold_line = f"⚠ Cena poniżej progu {threshold:.2f} {currency}!"
+        if low_availability:
+            low_msg = f"⚠ Mało miejsc! Dostępnych: {total_seats}"
+            threshold_line = f"{threshold_line}<br>{low_msg}" if threshold_line else low_msg
 
         future_history = history + [{"price": current_price, "checked_at": now}]
-        chart_png = generate_chart(future_history, route_label, currency)
+        chart_png = generate_chart(future_history, f"{origin} → {destination}", currency)
 
         subject = f"✈ Ryanair {origin}→{destination} {date}: {current_price:.2f} {currency}"
-        body = (
-            f"{change_line}{threshold_line}{availability_line}\n\n"
-            f"Data: {date}\n"
-            f"Trasa: {origin} → {destination}\n"
-            f"Sprawdzono: {now}\n\n"
-            f"Link: {ryanair_search_url(origin, destination, date)}"
+        link = ryanair_search_url(origin, destination, date)
+        body_html = build_email_html(
+            origin=origin,
+            destination=destination,
+            change_line=change_line,
+            threshold_line=threshold_line,
+            buckets=buckets,
+            currency=currency,
+            date=date,
+            now=now,
+            link=link,
+            has_chart=chart_png is not None,
         )
-        send_email(subject, body, email_to, chart_png)
+        send_email(subject, body_html, email_to, chart_png)
 
     history.append({"price": current_price, "checked_at": now})
     prices[key] = {"history": history}
