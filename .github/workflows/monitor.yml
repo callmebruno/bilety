@@ -2,7 +2,7 @@ name: Monitor cen Ryanair
 
 on:
   schedule:
-    - cron: '0 * * * *'   # co godzinę
+    - cron: '*/15 * * * *'   # co 15 minut
   workflow_dispatch:
     inputs:
       force:
