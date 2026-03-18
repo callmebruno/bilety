@@ -1,6 +1,6 @@
 {
   "currency": "PLN",
-  "email_to": "domyslny@interia.pl",
+  "email_to": "trelakrystian@gmail.com",
   "routes": [
     {
       "origin": "KRK",
@@ -19,13 +19,6 @@
     {
       "origin": "KRK",
       "destination": "OPO",
-      "date": "2026-06-07",
-      "price_threshold": null,
-      "email_to": "p.iwonastolarz@gmail.com, trelakrystian@gmail.com"
-    },
-    {
-      "origin": "KRK",
-      "destination": "LIS",
       "date": "2026-06-07",
       "price_threshold": null,
       "email_to": "p.iwonastolarz@gmail.com, trelakrystian@gmail.com"
