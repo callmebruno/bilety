@@ -36,6 +36,14 @@
       "date": "2026-06-19",
       "price_threshold": null,
       "email_to": "p.iwonastolarz@gmail.com, trelakrystian@gmail.com"
+    },
+    {
+      "airline": "wizzair",
+      "origin": "WAW",
+      "destination": "OPO",
+      "date": "2026-06-05",
+      "price_threshold": null,
+      "email_to": "trelakrystian@gmail.com"
     }
   ]
 }
