@@ -1,6 +1,7 @@
 import io
 import json
 import os
+import re
 import smtplib
 import sys
 from datetime import datetime
@@ -26,14 +27,15 @@ PRICES_FILE = Path(__file__).parent / "prices.json"
 
 RYANAIR_FARES_API = "https://www.ryanair.com/api/farfnd/v4/oneWayFares"
 RYANAIR_AVAILABILITY_API = "https://www.ryanair.com/api/booking/v4/pl-pl/availability"
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/122.0.0.0 Safari/537.36"
-    ),
-    "Accept": "application/json",
-}
+WIZZAIR_BUILDNUMBER_URL = "https://wizzair.com/buildnumber"
+UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/131.0.0.0 Safari/537.36"
+)
+HEADERS = {"User-Agent": UA, "Accept": "application/json"}
+
+_wizzair_api_version: str | None = None
 
 
 def load_config() -> dict:
@@ -58,9 +60,8 @@ def save_prices(prices: dict) -> None:
         json.dump(prices, f, indent=2, ensure_ascii=False)
 
 
-def fetch_price(origin: str, destination: str, date: str, currency: str) -> dict | None:
+def fetch_price_ryanair(origin: str, destination: str, date: str, currency: str) -> dict | None:
     """Zwraca dict {"price", "fares_left", "buckets"} lub None."""
-    # --- cena w wybranej walucie (stare API) ---
     fare_params = {
         "departureAirportIataCode": origin,
         "arrivalAirportIataCode": destination,
@@ -144,6 +145,80 @@ def fetch_price(origin: str, destination: str, date: str, currency: str) -> dict
 
     return {"price": price, "fares_left": fares_left, "buckets": buckets}
 
+
+# ── WizzAir ──────────────────────────────────────────────────────────────────
+
+def get_wizzair_api_version() -> str | None:
+    global _wizzair_api_version
+    if _wizzair_api_version:
+        return _wizzair_api_version
+    try:
+        resp = requests.get(WIZZAIR_BUILDNUMBER_URL, headers={"User-Agent": UA}, timeout=15)
+        resp.raise_for_status()
+        match = re.search(r"https://be\.wizzair\.com/([0-9.]+)", resp.text)
+        if match:
+            _wizzair_api_version = match.group(1)
+            print(f"[INFO] WizzAir API version: {_wizzair_api_version}")
+            return _wizzair_api_version
+    except requests.RequestException as e:
+        print(f"[ERROR] WizzAir API version: {e}", file=sys.stderr)
+    return None
+
+
+def fetch_price_wizzair(origin: str, destination: str, date: str, currency: str) -> dict | None:
+    """Zwraca dict {"price", "fares_left", "buckets"} lub None."""
+    version = get_wizzair_api_version()
+    if not version:
+        return None
+
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": UA,
+        "Accept": "application/json, text/plain, */*",
+        "Origin": "https://wizzair.com",
+        "Referer": "https://wizzair.com/pl-pl/flights/timetable",
+        "Content-Type": "application/json;charset=UTF-8",
+    })
+
+    url = f"https://be.wizzair.com/{version}/Api/search/timetable"
+    payload = {
+        "flightList": [{
+            "departureStation": origin,
+            "arrivalStation": destination,
+            "from": date,
+            "to": date,
+        }],
+        "priceType": "regular",
+        "adultCount": 1,
+        "childCount": 0,
+        "infantCount": 0,
+    }
+
+    try:
+        resp = session.post(url, json=payload, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+    except requests.RequestException as e:
+        print(f"[ERROR] WizzAir API: {e}", file=sys.stderr)
+        return None
+
+    flights = data.get("outboundFlights", [])
+    if not flights:
+        return None
+
+    best_price = None
+    for fl in flights:
+        amount = fl.get("price", {}).get("amount")
+        if amount is not None and (best_price is None or amount < best_price):
+            best_price = amount
+
+    if best_price is None:
+        return None
+
+    return {"price": best_price, "fares_left": -1, "buckets": []}
+
+
+# ── Wspólne ──────────────────────────────────────────────────────────────────
 
 def generate_chart(history: list, route_label: str, currency: str) -> bytes | None:
     valid = [(e["checked_at"], e["price"]) for e in history if e["price"] is not None]
@@ -277,9 +352,11 @@ def send_email(subject: str, body: str, email_to_raw: str, chart_png: bytes | No
 
 
 def ryanair_search_url(origin: str, destination: str, date: str) -> str:
-    return (
-        f"https://www.ryanair.com/pl/pl/booking/home/{origin}/{destination}/{date}/1/0/0/0"
-    )
+    return f"https://www.ryanair.com/pl/pl/booking/home/{origin}/{destination}/{date}/1/0/0/0"
+
+
+def wizzair_search_url(origin: str, destination: str, date: str) -> str:
+    return f"https://wizzair.com/pl-pl/booking/select-flight/{origin}/{destination}/{date}/null/1/0/0/null"
 
 
 def check_route(route: dict, cfg: dict, prices: dict, now: str, force: bool = False) -> None:
@@ -288,15 +365,22 @@ def check_route(route: dict, cfg: dict, prices: dict, now: str, force: bool = Fa
     date = route["date"]
     currency = cfg.get("currency", "PLN")
     threshold = route.get("price_threshold")
+    airline = route.get("airline", "ryanair").lower()
 
     global_email = os.environ.get("EMAIL_TO") or cfg.get("email_to", "")
     email_to = route.get("email_to") or global_email
 
     key = f"{origin}-{destination}-{date}"
-    route_label = f"{origin} → {destination} ({date})"
-    print(f"[{now}] Sprawdzam lot {origin} → {destination} na {date} ({currency})")
+    airline_label = "WizzAir" if airline == "wizzair" else "Ryanair"
+    print(f"[{now}] [{airline_label}] Sprawdzam {origin} → {destination} na {date} ({currency})")
 
-    result = fetch_price(origin, destination, date, currency)
+    if airline == "wizzair":
+        result = fetch_price_wizzair(origin, destination, date, currency)
+        search_url = wizzair_search_url(origin, destination, date)
+    else:
+        result = fetch_price_ryanair(origin, destination, date, currency)
+        search_url = ryanair_search_url(origin, destination, date)
+
     entry = prices.get(key, {"history": []})
     history = entry["history"]
     previous_price = history[-1]["price"] if history else None
@@ -304,18 +388,14 @@ def check_route(route: dict, cfg: dict, prices: dict, now: str, force: bool = Fa
     if result is None:
         print("[INFO] Brak dostępnych lotów / błąd API.")
         if previous_price is not None:
-            subject = f"✈ Ryanair {origin}→{destination} {date}: brak lotów"
-            link = ryanair_search_url(origin, destination, date)
+            subject = f"[{airline_label}] {origin}→{destination} {date}: brak lotów"
             body = f"""<html>
-<body style="font-family:Arial,Helvetica,sans-serif;color:#333;max-width:600px;margin:0;padding:16px">
-  <h2 style="color:#d32f2f;margin-bottom:4px">✈ {route_label}</h2>
-  <p style="font-size:16px">Poprzednia cena: <b>{previous_price:.2f} {currency}</b></p>
+<body style="font-family:Arial,sans-serif;color:#333;max-width:600px;margin:0;padding:16px">
+  <h2 style="color:#d32f2f">✈ {origin} → {destination} ({date})</h2>
+  <p>Poprzednia cena: <b>{previous_price:.2f} {currency}</b></p>
   <p style="color:#d32f2f;font-weight:bold">Lot niedostępny lub błąd API</p>
-  <p style="margin-top:16px">
-    <a href="{link}" style="display:inline-block;background:#1a73e8;color:white;padding:10px 20px;border-radius:6px;text-decoration:none;font-weight:bold">Sprawdź na Ryanair →</a>
-  </p>
-</body>
-</html>"""
+  <p><a href="{search_url}" style="display:inline-block;background:#1a73e8;color:white;padding:8px 16px;border-radius:4px;text-decoration:none">Sprawdź →</a></p>
+</body></html>"""
             send_email(subject, body, email_to)
         history.append({"price": None, "checked_at": now})
         prices[key] = {"history": history}
@@ -326,9 +406,9 @@ def check_route(route: dict, cfg: dict, prices: dict, now: str, force: bool = Fa
     buckets = result.get("buckets", [])
 
     if fares_left >= 0:
-        print(f"[INFO] Aktualna cena: {current_price:.2f} {currency} (poprzednia: {previous_price}) — zostało {fares_left} miejsc w tej cenie")
+        print(f"[INFO] Cena: {current_price:.2f} {currency} (poprz.: {previous_price}) — zostało {fares_left} miejsc")
     else:
-        print(f"[INFO] Aktualna cena: {current_price:.2f} {currency} (poprzednia: {previous_price})")
+        print(f"[INFO] Cena: {current_price:.2f} {currency} (poprz.: {previous_price})")
     if buckets:
         print(f"[INFO] Koszyki cenowe: {len(buckets)} poziomów")
 
@@ -361,8 +441,7 @@ def check_route(route: dict, cfg: dict, prices: dict, now: str, force: bool = Fa
         future_history = history + [{"price": current_price, "checked_at": now}]
         chart_png = generate_chart(future_history, f"{origin} → {destination}", currency)
 
-        subject = f"✈ Ryanair {origin}→{destination} {date}: {current_price:.2f} {currency}"
-        link = ryanair_search_url(origin, destination, date)
+        subject = f"[{airline_label}] {origin}→{destination} {date}: {current_price:.2f} {currency}"
         body_html = build_email_html(
             origin=origin,
             destination=destination,
@@ -372,7 +451,7 @@ def check_route(route: dict, cfg: dict, prices: dict, now: str, force: bool = Fa
             currency=currency,
             date=date,
             now=now,
-            link=link,
+            link=search_url,
             has_chart=chart_png is not None,
         )
         send_email(subject, body_html, email_to, chart_png)
