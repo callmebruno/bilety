@@ -18,24 +18,10 @@
     },
     {
       "origin": "KRK",
-      "destination": "OPO",
-      "date": "2026-06-07",
-      "price_threshold": null,
-      "email_to": "p.iwonastolarz@gmail.com, trelakrystian@gmail.com"
-    },
-    {
-      "origin": "KRK",
       "destination": "FAO",
       "date": "2026-09-15",
       "price_threshold": null,
       "email_to": "wiktorstepien966@gmail.com"
-    },
-    {
-      "origin": "LIS",
-      "destination": "KRK",
-      "date": "2026-06-19",
-      "price_threshold": null,
-      "email_to": "p.iwonastolarz@gmail.com, trelakrystian@gmail.com"
     },
     {
       "airline": "wizzair",
