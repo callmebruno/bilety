@@ -3,10 +3,11 @@
   "email_to": "trelakrystian@gmail.com",
   "routes": [
     {
+      "airline": "ryanair",
       "origin": "KRK",
       "destination": "FAO",
       "date": "2026-04-15",
-      "price_threshold": null,
+      "price_threshold": 10,
       "email_to": "p.iwonastolarz@gmail.com, trelakrystian@gmail.com"
     },
     {
