@@ -8,21 +8,25 @@
       "destination": "FAO",
       "date": "2026-04-15",
       "price_threshold": 10,
-      "email_to": "p.iwonastolarz@gmail.com, trelakrystian@gmail.com"
+      "email_to": "p.iwonastolarz@gmail.com, trelakrystian@gmail.com",
+      "email_enabled": false
     },
     {
+      "airline": "ryanair",
       "origin": "FAO",
       "destination": "KRK",
       "date": "2026-04-19",
       "price_threshold": null,
-      "email_to": "p.iwonastolarz@gmail.com, trelakrystian@gmail.com"
+      "email_to": "p.iwonastolarz@gmail.com, trelakrystian@gmail.com",
+      "email_enabled": false
     },
     {
       "origin": "KRK",
       "destination": "FAO",
       "date": "2026-09-15",
       "price_threshold": null,
-      "email_to": "wiktorstepien966@gmail.com"
+      "email_to": "wiktorstepien966@gmail.com",
+      "email_enabled": false
     },
     {
       "airline": "wizzair",
