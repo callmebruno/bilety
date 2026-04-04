@@ -369,6 +369,7 @@ def check_route(route: dict, cfg: dict, prices: dict, now: str, force: bool = Fa
 
     global_email = os.environ.get("EMAIL_TO") or cfg.get("email_to", "")
     email_to = route.get("email_to") or global_email
+    email_enabled = route.get("email_enabled", True)
 
     key = f"{origin}-{destination}-{date}"
     airline_label = "WizzAir" if airline == "wizzair" else "Ryanair"
@@ -396,7 +397,10 @@ def check_route(route: dict, cfg: dict, prices: dict, now: str, force: bool = Fa
   <p style="color:#d32f2f;font-weight:bold">Lot niedostępny lub błąd API</p>
   <p><a href="{search_url}" style="display:inline-block;background:#1a73e8;color:white;padding:8px 16px;border-radius:4px;text-decoration:none">Sprawdź →</a></p>
 </body></html>"""
-            send_email(subject, body, email_to)
+            if email_enabled:
+                send_email(subject, body, email_to)
+            else:
+                print("[INFO] email_enabled=false — pomijam wysyłkę (brak lotów).")
         history.append({"price": None, "checked_at": now})
         prices[key] = {"history": history}
         return
@@ -454,7 +458,10 @@ def check_route(route: dict, cfg: dict, prices: dict, now: str, force: bool = Fa
             link=search_url,
             has_chart=chart_png is not None,
         )
-        send_email(subject, body_html, email_to, chart_png)
+        if email_enabled:
+            send_email(subject, body_html, email_to, chart_png)
+        else:
+            print("[INFO] email_enabled=false — pomijam wysyłkę.")
 
     history.append({"price": current_price, "checked_at": now})
     prices[key] = {"history": history}
