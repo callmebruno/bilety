@@ -9,7 +9,7 @@
       "date": "2026-04-15",
       "price_threshold": null,
       "email_to": "p.iwonastolarz@gmail.com, trelakrystian@gmail.com",
-      "email_enabled": false
+      "email_enabled": true
     },
     {
       "airline": "ryanair",
@@ -18,7 +18,7 @@
       "date": "2026-04-19",
       "price_threshold": null,
       "email_to": "p.iwonastolarz@gmail.com, trelakrystian@gmail.com",
-      "email_enabled": false
+      "email_enabled": true
     },
     {
       "origin": "KRK",
@@ -35,7 +35,7 @@
       "date": "2026-06-05",
       "price_threshold": null,
       "email_to": "trelakrystian@gmail.com",
-      "email_enabled": false
+      "email_enabled": true
     }
   ]
 }
