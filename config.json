@@ -36,6 +36,15 @@
       "price_threshold": null,
       "email_to": "trelakrystian@gmail.com",
       "email_enabled": false
+    },
+    {
+      "airline": "ryanair",
+      "origin": "KRK",
+      "destination": "AGP",
+      "date": "2026-08-18",
+      "price_threshold": null,
+      "email_to": "wikste066@gmail.com, trelakrystian@gmail.com",
+      "email_enabled": true
     }
   ]
 }
