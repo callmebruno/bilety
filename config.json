@@ -54,6 +54,24 @@
       "price_threshold": null,
       "email_to": "wikste066@gmail.com",
       "email_enabled": true
+    },
+    {
+      "airline": "ryanair",
+      "origin": "KRK",
+      "destination": "BRI",
+      "date": "2026-08-14",
+      "price_threshold": null,
+      "email_to": "dominikjuszczyk96@gmail.com, trelakrystian@gmail.com",
+      "email_enabled": true
+    },
+    {
+      "airline": "ryanair",
+      "origin": "BRI",
+      "destination": "KRK",
+      "date": "2026-08-18",
+      "price_threshold": null,
+      "email_to": "dominikjuszczyk96@gmail.com, trelakrystian@gmail.com",
+      "email_enabled": true
     }
   ]
 }
