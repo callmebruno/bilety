@@ -52692,6 +52692,10 @@
       {
         "price": null,
         "checked_at": "2026-10-18 11:26"
+      },
+      {
+        "price": null,
+        "checked_at": "2026-10-18 11:28"
       }
     ]
   },
@@ -58360,6 +58364,18 @@
       {
         "price": null,
         "checked_at": "2026-10-18 11:26"
+      },
+      {
+        "price": null,
+        "checked_at": "2026-10-18 11:28"
+      }
+    ]
+  },
+  "ALC-KRK-2026-11-28": {
+    "history": [
+      {
+        "price": 237.57,
+        "checked_at": "2026-10-18 11:28"
       }
     ]
   }
