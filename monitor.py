@@ -60,8 +60,11 @@ def save_prices(prices: dict) -> None:
         json.dump(prices, f, indent=2, ensure_ascii=False)
 
 
-def fetch_price_ryanair(origin: str, destination: str, date: str, currency: str) -> dict | None:
-    """Zwraca dict {"price", "fares_left", "buckets"} lub None."""
+def fetch_price_ryanair(origin: str, destination: str, date: str, currency: str, time: str | None = None) -> dict | None:
+    """Zwraca dict {"price", "fares_left", "buckets"} lub None.
+
+    time ("HH:MM") — jeśli podany, liczy się tylko lot o tej godzinie wylotu.
+    """
     fare_params = {
         "departureAirportIataCode": origin,
         "arrivalAirportIataCode": destination,
@@ -82,20 +85,21 @@ def fetch_price_ryanair(origin: str, destination: str, date: str, currency: str)
     if not fares:
         return None
 
-    prices = [
-        fare["outbound"]["price"]["value"]
-        for fare in fares
-        if fare.get("outbound") and fare["outbound"].get("price")
-    ]
-    if not prices:
+    outbounds = [f["outbound"] for f in fares if f.get("outbound") and f["outbound"].get("price")]
+    if not outbounds:
         return None
-    price = min(prices)
+    cheapest = min(outbounds, key=lambda o: o["price"]["value"])
+    cheapest_time = cheapest.get("departureDate", "")[11:16]
+    # fares API zwraca tylko najtańszy lot dnia — przy filtrze godziny cena może
+    # pochodzić z availability API (przeliczona proporcją względem najtańszego lotu)
+    price = cheapest["price"]["value"] if time is None or cheapest_time == time else None
 
     # --- dostępność miejsc + koszyki cenowe (availability API) ---
     fares_left = -1
     buckets = []
     try:
         avail_prices = {}
+        cheapest_raw = None
         for adt in range(1, 26):
             avail_params = {
                 "ADT": adt, "CHD": 0, "TEEN": 0, "INF": 0,
@@ -113,6 +117,13 @@ def fetch_price_ryanair(origin: str, destination: str, date: str, currency: str)
             for trip in data2.get("trips", []):
                 for dt in trip.get("dates", []):
                     for flight in dt.get("flights", []):
+                        flight_time = (flight.get("time") or [""])[0][11:16]
+                        if adt == 1 and flight_time == cheapest_time:
+                            rf_c = flight.get("regularFare")
+                            if rf_c and rf_c.get("fares"):
+                                cheapest_raw = rf_c["fares"][0]["amount"]
+                        if time is not None and flight_time != time:
+                            continue
                         if adt == 1:
                             fl = flight.get("faresLeft", -1)
                             if fl >= 0 and (fares_left < 0 or fl < fares_left):
@@ -125,7 +136,9 @@ def fetch_price_ryanair(origin: str, destination: str, date: str, currency: str)
         # Przelicz koszyki na walutę docelową (PLN)
         # availability API zwraca walutę kraju wylotu (np. EUR, MAD)
         # fares API zwraca walutę z configu (PLN) — używamy proporcji
-        if avail_prices and avail_prices.get(1):
+        if price is None and avail_prices.get(1) and cheapest_raw:
+            price = round(avail_prices[1] * cheapest["price"]["value"] / cheapest_raw, 2)
+        if price is not None and avail_prices and avail_prices.get(1):
             ratio = price / avail_prices[1]  # np. 310 PLN / 91 EUR = 3.41
 
             prev_raw = None
@@ -143,6 +156,9 @@ def fetch_price_ryanair(origin: str, destination: str, date: str, currency: str)
     except requests.RequestException:
         pass  # dostępność opcjonalna
 
+    if price is None:
+        print(f"[INFO] Lot o {time} nie jest najtańszy dnia, a availability API niedostępne — brak ceny.")
+        return None
     return {"price": price, "fares_left": fares_left, "buckets": buckets}
 
 
@@ -366,6 +382,7 @@ def check_route(route: dict, cfg: dict, prices: dict, now: str, force: bool = Fa
     currency = cfg.get("currency", "PLN")
     threshold = route.get("price_threshold")
     airline = route.get("airline", "ryanair").lower()
+    flight_time = route.get("time")
 
     global_email = os.environ.get("EMAIL_TO") or cfg.get("email_to", "")
     email_to = route.get("email_to") or global_email
@@ -373,13 +390,14 @@ def check_route(route: dict, cfg: dict, prices: dict, now: str, force: bool = Fa
 
     key = f"{origin}-{destination}-{date}"
     airline_label = "WizzAir" if airline == "wizzair" else "Ryanair"
-    print(f"[{now}] [{airline_label}] Sprawdzam {origin} → {destination} na {date} ({currency})")
+    time_label = f" {flight_time}" if flight_time else ""
+    print(f"[{now}] [{airline_label}] Sprawdzam {origin} → {destination} na {date}{time_label} ({currency})")
 
     if airline == "wizzair":
         result = fetch_price_wizzair(origin, destination, date, currency)
         search_url = wizzair_search_url(origin, destination, date)
     else:
-        result = fetch_price_ryanair(origin, destination, date, currency)
+        result = fetch_price_ryanair(origin, destination, date, currency, flight_time)
         search_url = ryanair_search_url(origin, destination, date)
 
     entry = prices.get(key, {"history": []})
@@ -445,7 +463,7 @@ def check_route(route: dict, cfg: dict, prices: dict, now: str, force: bool = Fa
         future_history = history + [{"price": current_price, "checked_at": now}]
         chart_png = generate_chart(future_history, f"{origin} → {destination}", currency)
 
-        subject = f"[{airline_label}] {origin}→{destination} {date}: {current_price:.2f} {currency}"
+        subject = f"[{airline_label}] {origin}→{destination} {date}{time_label}: {current_price:.2f} {currency}"
         body_html = build_email_html(
             origin=origin,
             destination=destination,
