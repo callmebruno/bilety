@@ -73,6 +73,10 @@ def fetch_price_ryanair(origin: str, destination: str, date: str, currency: str,
         "currency": currency,
         "market": "pl-pl",
     }
+    if time:
+        # bez filtra API zwraca tylko najtańszy lot dnia
+        fare_params["outboundDepartureTimeFrom"] = time
+        fare_params["outboundDepartureTimeTo"] = time
     try:
         resp = requests.get(RYANAIR_FARES_API, params=fare_params, headers=HEADERS, timeout=30)
         resp.raise_for_status()
@@ -85,21 +89,20 @@ def fetch_price_ryanair(origin: str, destination: str, date: str, currency: str,
     if not fares:
         return None
 
-    outbounds = [f["outbound"] for f in fares if f.get("outbound") and f["outbound"].get("price")]
-    if not outbounds:
+    prices = [
+        fare["outbound"]["price"]["value"]
+        for fare in fares
+        if fare.get("outbound") and fare["outbound"].get("price")
+    ]
+    if not prices:
         return None
-    cheapest = min(outbounds, key=lambda o: o["price"]["value"])
-    cheapest_time = cheapest.get("departureDate", "")[11:16]
-    # fares API zwraca tylko najtańszy lot dnia — przy filtrze godziny cena może
-    # pochodzić z availability API (przeliczona proporcją względem najtańszego lotu)
-    price = cheapest["price"]["value"] if time is None or cheapest_time == time else None
+    price = min(prices)
 
     # --- dostępność miejsc + koszyki cenowe (availability API) ---
     fares_left = -1
     buckets = []
     try:
         avail_prices = {}
-        cheapest_raw = None
         for adt in range(1, 26):
             avail_params = {
                 "ADT": adt, "CHD": 0, "TEEN": 0, "INF": 0,
@@ -118,10 +121,6 @@ def fetch_price_ryanair(origin: str, destination: str, date: str, currency: str,
                 for dt in trip.get("dates", []):
                     for flight in dt.get("flights", []):
                         flight_time = (flight.get("time") or [""])[0][11:16]
-                        if adt == 1 and flight_time == cheapest_time:
-                            rf_c = flight.get("regularFare")
-                            if rf_c and rf_c.get("fares"):
-                                cheapest_raw = rf_c["fares"][0]["amount"]
                         if time is not None and flight_time != time:
                             continue
                         if adt == 1:
@@ -136,9 +135,7 @@ def fetch_price_ryanair(origin: str, destination: str, date: str, currency: str,
         # Przelicz koszyki na walutę docelową (PLN)
         # availability API zwraca walutę kraju wylotu (np. EUR, MAD)
         # fares API zwraca walutę z configu (PLN) — używamy proporcji
-        if price is None and avail_prices.get(1) and cheapest_raw:
-            price = round(avail_prices[1] * cheapest["price"]["value"] / cheapest_raw, 2)
-        if price is not None and avail_prices and avail_prices.get(1):
+        if avail_prices and avail_prices.get(1):
             ratio = price / avail_prices[1]  # np. 310 PLN / 91 EUR = 3.41
 
             prev_raw = None
@@ -156,9 +153,6 @@ def fetch_price_ryanair(origin: str, destination: str, date: str, currency: str,
     except requests.RequestException:
         pass  # dostępność opcjonalna
 
-    if price is None:
-        print(f"[INFO] Lot o {time} nie jest najtańszy dnia, a availability API niedostępne — brak ceny.")
-        return None
     return {"price": price, "fares_left": fares_left, "buckets": buckets}
 
 
@@ -407,10 +401,10 @@ def check_route(route: dict, cfg: dict, prices: dict, now: str, force: bool = Fa
     if result is None:
         print("[INFO] Brak dostępnych lotów / błąd API.")
         if previous_price is not None:
-            subject = f"[{airline_label}] {origin}→{destination} {date}: brak lotów"
+            subject = f"[{airline_label}] {origin}→{destination} {date}{time_label}: brak lotów"
             body = f"""<html>
 <body style="font-family:Arial,sans-serif;color:#333;max-width:600px;margin:0;padding:16px">
-  <h2 style="color:#d32f2f">✈ {origin} → {destination} ({date})</h2>
+  <h2 style="color:#d32f2f">✈ {origin} → {destination} ({date}{time_label})</h2>
   <p>Poprzednia cena: <b>{previous_price:.2f} {currency}</b></p>
   <p style="color:#d32f2f;font-weight:bold">Lot niedostępny lub błąd API</p>
   <p><a href="{search_url}" style="display:inline-block;background:#1a73e8;color:white;padding:8px 16px;border-radius:4px;text-decoration:none">Sprawdź →</a></p>
